@@ -305,275 +305,179 @@ Effort: Low
 
 ---
 
-## 3. Windows Compatibility
+## 3. Windows Compatibility (via WSL2)
 
-### 3.1 Current Limitations
+### 3.1 Strategy: WSL2
 
-| Component | Issue | Solution |
-|-----------|-------|----------|
-| Hook script | Bash-only | Create PowerShell hook |
-| tmux | Not available | Use ConPTY/Windows Terminal |
-| Path handling | Backslashes | Normalize paths |
-| `jq` | Not typically installed | Bundle or use Node.js |
+WSL2 provides the simplest path to Windows support with **full feature parity**.
 
-### 3.2 Strategy Options
+**Why WSL2:**
+- Bash hook works natively (no PowerShell port needed)
+- tmux works (prompt injection supported)
+- `jq` and `curl` install via `apt`
+- Localhost ports auto-forward to Windows browser
+- Single codebase to maintain
 
-#### Option A: PowerShell Hook (Recommended)
+**Requirements:**
+- Windows 10 version 2004+ or Windows 11
+- WSL2 with Ubuntu (or similar distro)
+
+### 3.2 Architecture
+
 ```
-Effort: Medium
-Compatibility: Native Windows
-```
-
-Create a PowerShell equivalent of the bash hook that:
-- Reads JSON from stdin
-- Transforms to event format
-- Writes to events.jsonl
-- POSTs to server
-
-**Pros:**
-- Native Windows support
-- No additional dependencies (PowerShell is built-in)
-- Can bundle `jq` equivalent in PowerShell
-
-**Cons:**
-- Duplicate logic (bash + PowerShell)
-- Need to maintain two scripts
-
-#### Option B: Node.js Cross-Platform Hook
-```
-Effort: Medium-High
-Compatibility: All platforms
-```
-
-Replace bash hook with a Node.js script that works everywhere.
-
-**Pros:**
-- Single codebase
-- No platform-specific logic
-- Better error handling
-
-**Cons:**
-- Slower startup (Node.js overhead)
-- Requires Node.js in PATH during hook execution
-
-#### Option C: WSL2 Support Only
-```
-Effort: Low
-Compatibility: Windows 10/11 with WSL2
+┌─────────────────────────────────────────────────────────────┐
+│  Windows Host                                                │
+│  ┌────────────────────────────────────────────────────────┐ │
+│  │  Windows Browser                                        │ │
+│  │  http://localhost:4003  ←──────────────────────┐       │ │
+│  └────────────────────────────────────────────────│───────┘ │
+│                                                    │         │
+│  ┌────────────────────────────────────────────────│───────┐ │
+│  │  WSL2 (Ubuntu)                                 │       │ │
+│  │                                                │       │ │
+│  │  ┌──────────────┐    ┌──────────────────────┐ │       │ │
+│  │  │ Claude Code  │───→│ vibecraft-hook.sh    │ │       │ │
+│  │  │ (in tmux)    │    │ writes events.jsonl  │ │       │ │
+│  │  └──────────────┘    └──────────┬───────────┘ │       │ │
+│  │                                  │             │       │ │
+│  │                      ┌───────────▼───────────┐│       │ │
+│  │                      │ vibecraft server      ││       │ │
+│  │                      │ :4003 (auto-forwards) │├───────┘ │ │
+│  │                      └───────────────────────┘│         │ │
+│  └────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-Document running Claude Code in WSL2, where bash hooks work natively.
+### 3.3 Setup Instructions
 
-**Pros:**
-- No code changes needed
-- Full feature parity
+**File: `docs/WINDOWS.md`**
 
-**Cons:**
-- Requires WSL2 setup
-- Not all Windows users want/can use WSL
+```markdown
+# Vibecraft on Windows (WSL2)
 
-### 3.3 Recommended Approach: Hybrid (A + C)
+## Prerequisites
 
-1. **Primary:** Create PowerShell hook for native Windows
-2. **Alternative:** Document WSL2 as full-feature option
+1. **Enable WSL2** (if not already):
+   ```powershell
+   # Run in PowerShell as Administrator
+   wsl --install
+   ```
+   Restart your computer when prompted.
 
-### 3.4 PowerShell Hook Implementation
+2. **Install Ubuntu** (default with wsl --install, or from Microsoft Store)
 
-**File: `hooks/vibecraft-hook.ps1`**
+## Installation
+
+Open Ubuntu (WSL2) terminal and run:
+
+```bash
+# 1. Install dependencies
+sudo apt update
+sudo apt install -y jq tmux curl nodejs npm
+
+# 2. Install Claude Code (if not already)
+npm install -g @anthropic-ai/claude-code
+
+# 3. Configure vibecraft hooks
+npx vibecraft setup
+
+# 4. Start tmux session for Claude
+tmux new -s claude
+
+# 5. Run Claude Code
+claude
+
+# 6. In another terminal (or tmux pane), start vibecraft
+npx vibecraft
+```
+
+## Access from Windows Browser
+
+Open your Windows browser and go to:
+```
+http://localhost:4003
+```
+
+WSL2 automatically forwards localhost ports to Windows.
+
+## Tips
+
+### File Access
+- Access Windows files from WSL2: `/mnt/c/Users/YourName/...`
+- For best performance, keep projects in WSL2 filesystem: `~/projects/`
+
+### Multiple Terminals
+Use Windows Terminal for easy WSL2 tab management:
 ```powershell
-#Requires -Version 5.1
-<#
-.SYNOPSIS
-    Vibecraft Hook for Windows - Captures Claude Code events
-.DESCRIPTION
-    PowerShell equivalent of vibecraft-hook.sh for Windows systems
-#>
-
-param()
-
-$ErrorActionPreference = "Stop"
-
-# Configuration
-$DataDir = Join-Path $env:USERPROFILE ".vibecraft\data"
-$EventsFile = Join-Path $DataDir "events.jsonl"
-$ServerUrl = if ($env:VIBECRAFT_SERVER_URL) { $env:VIBECRAFT_SERVER_URL } else { "http://localhost:4003" }
-$NotifyUrl = "$ServerUrl/event"
-
-# Ensure data directory exists
-if (-not (Test-Path $DataDir)) {
-    New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
-}
-
-# Read input from stdin
-$input = [Console]::In.ReadToEnd()
-
-try {
-    $data = $input | ConvertFrom-Json
-} catch {
-    Write-Error "Failed to parse JSON input"
-    exit 1
-}
-
-# Extract common fields
-$hookEventName = $data.hook_event_name
-$sessionId = if ($data.session_id) { $data.session_id } else { "unknown" }
-$cwd = if ($data.cwd) { $data.cwd } else { "" }
-
-# Generate event ID and timestamp
-$timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-$eventId = "$sessionId-$timestamp-$(Get-Random)"
-
-# Map event types
-$eventTypeMap = @{
-    "PreToolUse" = "pre_tool_use"
-    "PostToolUse" = "post_tool_use"
-    "Stop" = "stop"
-    "SubagentStop" = "subagent_stop"
-    "SessionStart" = "session_start"
-    "SessionEnd" = "session_end"
-    "UserPromptSubmit" = "user_prompt_submit"
-    "Notification" = "notification"
-}
-
-$eventType = if ($eventTypeMap.ContainsKey($hookEventName)) {
-    $eventTypeMap[$hookEventName]
-} else {
-    "unknown"
-}
-
-# Build event object based on type
-$event = @{
-    id = $eventId
-    timestamp = $timestamp
-    type = $eventType
-    sessionId = $sessionId
-    cwd = $cwd
-}
-
-switch ($eventType) {
-    "pre_tool_use" {
-        $event.tool = $data.tool_name
-        $event.toolInput = $data.tool_input
-        $event.toolUseId = $data.tool_use_id
-    }
-    "post_tool_use" {
-        $event.tool = $data.tool_name
-        $event.toolInput = $data.tool_input
-        $event.toolResponse = $data.tool_response
-        $event.toolUseId = $data.tool_use_id
-        $event.success = if ($data.tool_response.success -ne $null) {
-            $data.tool_response.success
-        } else {
-            $true
-        }
-    }
-    "stop" {
-        $event.stopHookActive = $data.stop_hook_active
-    }
-    "user_prompt_submit" {
-        $event.prompt = $data.prompt
-    }
-    "notification" {
-        $event.message = $data.message
-        $event.notificationType = $data.notification_type
-    }
-}
-
-# Convert to JSON (compact)
-$eventJson = $event | ConvertTo-Json -Compress -Depth 10
-
-# Append to events file
-Add-Content -Path $EventsFile -Value $eventJson -NoNewline
-Add-Content -Path $EventsFile -Value ""
-
-# Notify server (fire and forget)
-try {
-    $null = Invoke-RestMethod -Uri $NotifyUrl -Method Post -Body $eventJson `
-        -ContentType "application/json" -TimeoutSec 2 -ErrorAction SilentlyContinue
-} catch {
-    # Ignore errors - don't block Claude
-}
-
-exit 0
+# Install from Microsoft Store or:
+winget install Microsoft.WindowsTerminal
 ```
 
-### 3.5 Windows Session Management
+### Troubleshooting
 
-**Challenge:** tmux doesn't exist on Windows. Need alternative for:
-1. Session spawning (`tmux new-session`)
-2. Prompt injection (`tmux send-keys`)
+**Port not accessible from Windows?**
+```bash
+# Check if server is running
+curl http://localhost:4003/health
 
-**Options:**
-
-#### A. Windows Terminal + PowerShell
-Use Windows Terminal's command-line interface with named tabs.
-
-```powershell
-# Start new session
-wt -w 0 new-tab --title "claude-1" powershell -NoExit -Command "claude"
-
-# Send keys (requires additional tooling)
-# Windows doesn't have a native send-keys equivalent
+# If WSL2 networking is in NAT mode, ports should forward automatically
+# If not, check: https://learn.microsoft.com/en-us/windows/wsl/networking
 ```
 
-**Limitation:** No reliable way to send keystrokes to another terminal.
+**Claude Code not found?**
+```bash
+# Ensure Node.js is installed in WSL2
+node --version  # Should be 18+
 
-#### B. Named Pipes / IPC
-Create a wrapper that Claude runs in, which listens for prompt injection.
-
+# Reinstall Claude Code
+npm install -g @anthropic-ai/claude-code
 ```
-┌─────────────────────────────────────────┐
-│  claude-wrapper.ps1                      │
-│  - Starts Claude Code                   │
-│  - Listens on named pipe                │
-│  - Injects prompts when received        │
-└─────────────────────────────────────────┘
 ```
 
-#### C. Browser-Only Mode (Recommended for Windows)
-For Windows users, disable tmux features and focus on:
-- Event visualization (works fully)
-- Activity feed (works fully)
-- Stats and monitoring (works fully)
-
-Document that prompt injection requires WSL2 or is not available on native Windows.
-
-### 3.6 Windows Tasks Checklist
+### 3.4 Implementation Tasks
 
 ```
-[ ] Create PowerShell hook (vibecraft-hook.ps1)
-[ ] Update CLI setup command for Windows detection
-[ ] Add Windows-specific settings.json configuration
-[ ] Handle path normalization (backslashes)
-[ ] Document Windows limitations (no tmux prompt injection)
-[ ] Document WSL2 as full-feature alternative
-[ ] Test on Windows 10 and Windows 11
-[ ] Add Windows-specific health checks in doctor command
+[ ] Create docs/WINDOWS.md with WSL2 setup guide
+[ ] Add WSL2 detection to `vibecraft doctor` command
+[ ] Update README.md with Windows/WSL2 section
+[ ] Test full workflow on Windows 10 and 11
+[ ] Add troubleshooting section for common WSL2 issues
 ```
+
+### 3.5 Known Limitations
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Event visualization | ✅ Works | Full support |
+| Activity feed | ✅ Works | Full support |
+| Prompt injection | ✅ Works | Via tmux in WSL2 |
+| Multi-session | ✅ Works | Full support |
+| Voice input | ✅ Works | Browser handles mic |
+| File paths | ⚠️ Note | Use WSL2 paths, not /mnt/c/ for best perf |
 
 ---
 
 ## 4. Implementation Order
 
-### Phase 1: Security (Week 1)
+### Phase 1: Security
 1. Rate limiting
 2. API key file support
 3. WebSocket connection limits
 4. Input validation
 
-### Phase 2: Docker (Week 2)
+### Phase 2: Docker
 1. Dockerfile
 2. docker-compose.yml
 3. Hook URL configuration
 4. Documentation
 
-### Phase 3: Windows (Week 3)
-1. PowerShell hook
-2. CLI Windows detection
-3. Path normalization
-4. Documentation
+### Phase 3: Windows/WSL2
+1. Create docs/WINDOWS.md
+2. Add WSL2 detection to doctor command
+3. Update README
+4. Test on Windows 10/11
 
-### Phase 4: Polish (Week 4)
+### Phase 4: Polish
 1. Multi-arch Docker builds
 2. GitHub Actions CI/CD
 3. Comprehensive testing
@@ -588,7 +492,6 @@ Document that prompt injection requires WSL2 or is not available on native Windo
 Dockerfile
 docker-compose.yml
 .dockerignore
-hooks/vibecraft-hook.ps1
 server/rateLimit.ts
 docs/DOCKER.md
 docs/WINDOWS.md
@@ -598,8 +501,8 @@ docs/WINDOWS.md
 ```
 server/index.ts          # Rate limiting, API key file, connection limits
 hooks/vibecraft-hook.sh  # Configurable server URL
-bin/cli.js               # Windows detection, docker-setup command
-README.md                # Docker and Windows docs
+bin/cli.js               # WSL2 detection, docker-setup command
+README.md                # Docker and Windows/WSL2 docs
 package.json             # Docker scripts
 ```
 
@@ -617,8 +520,8 @@ package.json             # Docker scripts
 - [ ] Events from host hook appear in container
 - [ ] Data persists across container restarts
 
-### Windows
-- [ ] PowerShell hook captures events
-- [ ] `npx vibecraft setup` works on Windows
-- [ ] Visualization works in browser
-- [ ] Clear documentation of limitations
+### Windows (WSL2)
+- [ ] WSL2 setup guide is clear and complete
+- [ ] `vibecraft doctor` detects WSL2 environment
+- [ ] Full workflow works (hooks, tmux, browser)
+- [ ] Tested on Windows 10 and Windows 11
