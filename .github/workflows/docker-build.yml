@@ -78,9 +78,10 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: anchore/sbom-action@v0
         with:
-          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           artifact-name: sbom.spdx.json
           output-file: ./sbom.spdx.json
+        continue-on-error: true
 
       - name: Upload SBOM
         if: github.event_name != 'pull_request'
@@ -88,3 +89,4 @@ jobs:
         with:
           name: sbom
           path: ./sbom.spdx.json
+        continue-on-error: true
