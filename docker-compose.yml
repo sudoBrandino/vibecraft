@@ -1,0 +1,80 @@
+# Vibecraft Docker Compose Configuration
+#
+# Usage:
+#   docker-compose up -d          # Start in background
+#   docker-compose logs -f        # View logs
+#   docker-compose down           # Stop
+#
+# The hook script runs on the HOST (where Claude Code runs).
+# Configure it to post events to this container.
+
+version: '3.8'
+
+services:
+  vibecraft:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vibecraft:latest
+    container_name: vibecraft
+    restart: unless-stopped
+
+    ports:
+      - "${VIBECRAFT_PORT:-4003}:4003"
+
+    volumes:
+      # Persistent data storage
+      - vibecraft-data:/data
+
+      # Alternative: Mount host directory for shared access with hook
+      # - ~/.vibecraft/data:/data
+
+    environment:
+      - VIBECRAFT_PORT=4003
+      - VIBECRAFT_DEBUG=${VIBECRAFT_DEBUG:-false}
+      # Deepgram API key (optional, for voice input)
+      # Option 1: Direct env var (less secure)
+      # - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
+      # Option 2: File-based (more secure, see secrets below)
+      - DEEPGRAM_API_KEY_FILE=/run/secrets/deepgram_key
+
+    # Docker secrets for sensitive data
+    secrets:
+      - deepgram_key
+
+    # Resource limits (adjust as needed)
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# Named volumes for data persistence
+volumes:
+  vibecraft-data:
+    driver: local
+
+# Secrets configuration
+# Create secrets/deepgram.txt with your API key (optional)
+secrets:
+  deepgram_key:
+    file: ./secrets/deepgram.txt
+
+# =============================================================================
+# Network Configuration (optional)
+# =============================================================================
+# Uncomment to use a custom network
+# networks:
+#   default:
+#     name: vibecraft-network
+#     driver: bridge

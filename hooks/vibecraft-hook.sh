@@ -76,7 +76,12 @@ CURL=$(find_tool "curl") || {
 # location regardless of how vibecraft was installed (npx, global npm, local dev).
 VIBECRAFT_DATA_DIR="${VIBECRAFT_DATA_DIR:-$HOME/.vibecraft/data}"
 EVENTS_FILE="${VIBECRAFT_EVENTS_FILE:-$VIBECRAFT_DATA_DIR/events.jsonl}"
-WS_NOTIFY_URL="${VIBECRAFT_WS_NOTIFY:-http://localhost:4003/event}"
+
+# Server URL configuration (for Docker or remote server setups)
+# VIBECRAFT_SERVER_URL takes precedence over VIBECRAFT_WS_NOTIFY for clarity
+DEFAULT_SERVER_URL="http://localhost:4003"
+SERVER_URL="${VIBECRAFT_SERVER_URL:-$DEFAULT_SERVER_URL}"
+WS_NOTIFY_URL="${VIBECRAFT_WS_NOTIFY:-$SERVER_URL/event}"
 ENABLE_WS_NOTIFY="${VIBECRAFT_ENABLE_WS_NOTIFY:-true}"
 
 # Ensure data directory exists

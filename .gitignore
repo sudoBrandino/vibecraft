@@ -28,6 +28,10 @@ Thumbs.db
 *.log
 npm-debug.log*
 
+# Secrets (keep examples)
+secrets/*
+!secrets/*.example
+
 # TypeScript cache
 *.tsbuildinfo
 *.png

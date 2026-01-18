@@ -38,6 +38,16 @@ import { DEFAULTS } from '../shared/defaults.js'
 import { GitStatusManager } from './GitStatusManager.js'
 import { ProjectsManager } from './ProjectsManager.js'
 import { fileURLToPath } from 'url'
+import {
+  checkRateLimit,
+  getRateLimitConfig,
+  getClientIp,
+  startRateLimitCleanup,
+  checkWsConnectionLimit,
+  trackWsConnection,
+  untrackWsConnection,
+  getRateLimitStoreSize,
+} from './rateLimit.js'
 
 // ============================================================================
 // Version (read from package.json)
@@ -313,13 +323,33 @@ const voiceSessions = new Map<WebSocket, LiveClient>()
 /** Deepgram API key (loaded on startup) */
 let deepgramApiKey: string | null = null
 
-/** Load Deepgram API key from environment */
+/** Load Deepgram API key from file or environment
+ *  Priority: DEEPGRAM_API_KEY_FILE > DEEPGRAM_API_KEY
+ */
 function loadDeepgramKey(): string | null {
+  // First try to load from file (more secure, Docker secrets compatible)
+  const keyFile = process.env.DEEPGRAM_API_KEY_FILE
+  if (keyFile) {
+    try {
+      if (existsSync(keyFile)) {
+        const key = readFileSync(keyFile, 'utf-8').trim()
+        if (key) {
+          log('Deepgram API key loaded from file')
+          return key
+        }
+      }
+    } catch (e) {
+      log(`Warning: Failed to read Deepgram key file: ${e}`)
+    }
+  }
+
+  // Fall back to environment variable
   const key = process.env[DEEPGRAM_API_KEY_ENV]?.trim()
   if (key) {
     log('Deepgram API key loaded from environment')
     return key
   }
+
   log(`${DEEPGRAM_API_KEY_ENV} not set - voice input disabled`)
   return null
 }
@@ -1474,12 +1504,34 @@ function handleClientMessage(ws: WebSocket, message: ClientMessage) {
 
 function handleHttpRequest(req: IncomingMessage, res: ServerResponse) {
   const origin = req.headers.origin
+  const clientIp = getClientIp(req)
+  const urlPath = req.url?.split('?')[0] ?? '/'
 
   // CORS headers - only allow specific origins
   if (origin && isOriginAllowed(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin)
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS')
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+  }
+
+  // Rate limiting (skip for OPTIONS preflight)
+  if (req.method !== 'OPTIONS') {
+    const rateLimitConfig = getRateLimitConfig(urlPath)
+    const rateCheck = checkRateLimit(clientIp, urlPath, rateLimitConfig)
+
+    // Add rate limit headers
+    res.setHeader('X-RateLimit-Limit', rateLimitConfig.maxRequests)
+    res.setHeader('X-RateLimit-Remaining', rateCheck.remaining)
+    res.setHeader('X-RateLimit-Reset', Math.ceil(rateCheck.resetAt / 1000))
+
+    if (!rateCheck.allowed) {
+      res.writeHead(429, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        error: 'Too Many Requests',
+        retryAfter: Math.ceil((rateCheck.resetAt - Date.now()) / 1000),
+      }))
+      return
+    }
   }
 
   if (req.method === 'OPTIONS') {
@@ -1523,6 +1575,7 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse) {
       clients: clients.size,
       events: events.length,
       voiceEnabled: !!deepgramApiKey,
+      rateLimitEntries: getRateLimitStoreSize(),
     }))
     return
   }
@@ -2252,6 +2305,16 @@ function main() {
       return
     }
 
+    // Connection limit per IP
+    const clientIp = getClientIp(req)
+    if (!checkWsConnectionLimit(clientIp)) {
+      log(`Rejected WebSocket connection from ${clientIp}: too many connections`)
+      ws.close(1008, 'Too many connections from this IP')
+      return
+    }
+
+    // Track this connection
+    trackWsConnection(clientIp, ws)
     clients.add(ws)
     log(`Client connected (${clients.size} total)${origin ? ` from ${origin}` : ''}`)
 
@@ -2310,6 +2373,7 @@ function main() {
 
     ws.on('close', () => {
       stopVoiceSession(ws) // Clean up any voice session
+      untrackWsConnection(clientIp, ws)
       clients.delete(ws)
       log(`Client disconnected (${clients.size} total)`)
     })
@@ -2342,6 +2406,9 @@ function main() {
 
     // Start session health checking (every 5 seconds)
     setInterval(checkSessionHealth, 5000)
+
+    // Start rate limit cleanup (cleans expired entries every 5 minutes)
+    startRateLimitCleanup()
 
     // Start working timeout checking (every 10 seconds)
     setInterval(checkWorkingTimeout, WORKING_CHECK_INTERVAL_MS)

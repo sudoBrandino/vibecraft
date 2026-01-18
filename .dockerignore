@@ -1,0 +1,61 @@
+# Dependencies
+node_modules/
+
+# Build output (we build inside container)
+dist/
+
+# Development files
+*.log
+*.tmp
+.env
+.env.*
+!.env.example
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Documentation (not needed in image)
+docs/
+*.md
+!README.md
+
+# Test files
+*.test.ts
+*.spec.ts
+__tests__/
+coverage/
+
+# Secrets (never include in image)
+secrets/
+*.key
+*.pem
+*.crt
+
+# Local data
+data/
+*.jsonl
+
+# Docker files (not needed inside image)
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# Misc
+*.tgz
+*.tar.gz
