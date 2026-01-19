@@ -20,8 +20,10 @@ RUN npm ci
 # Copy source files
 COPY . .
 
-# Build client and server
-RUN npm run build
+# Build server only - client is pre-built on host to avoid Rollup cross-compilation issues
+# The COPY . . above includes the pre-built dist/ directory from the host
+# When building locally: run npm run build:client first, then docker build
+RUN npm run build:server
 
 # =============================================================================
 # Production Stage
