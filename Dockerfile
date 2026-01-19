@@ -2,14 +2,18 @@
 # Multi-stage build for minimal production image
 
 # =============================================================================
-# Build Stage
+# Build Stage - Use full Node image for better compatibility
 # =============================================================================
-FROM node:20-alpine AS builder
+FROM node:20-slim AS builder
 
 WORKDIR /app
 
 # Install build dependencies
-RUN apk add --no-cache python3 make g++
+RUN apt-get update && apt-get install -y \
+    python3 \
+    make \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy package files first (better layer caching)
 COPY package*.json ./
