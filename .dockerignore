@@ -1,8 +1,9 @@
 # Dependencies
 node_modules/
 
-# Build output (we build inside container)
-dist/
+# Build output - server is built in container, but client is pre-built on host
+# to avoid Rollup cross-compilation issues with ARM64 musl
+dist/server/
 
 # Development files
 *.log
